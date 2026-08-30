@@ -139,7 +139,8 @@ class NitroWatchdogTests(unittest.TestCase):
             root = Path(temporary)
             HardwareFixture(root)
             hardware = NitroHardware(root)
-            daemon = NitroDaemon(hardware, root / "run/control.sock", "wheel", 1000, 5)
+            group_name = grp.getgrgid(os.getgid()).gr_name
+            daemon = NitroDaemon(hardware, root / "run/control.sock", group_name, 1000, 5)
             response = daemon._response({"action": "manual", "cpu": 40, "gpu": 40})
             self.assertTrue(response["ok"])
             daemon.manual_deadline = time.monotonic() - 1
@@ -152,7 +153,8 @@ class NitroWatchdogTests(unittest.TestCase):
             root = Path(temporary)
             fixture = HardwareFixture(root)
             hardware = NitroHardware(root)
-            daemon = NitroDaemon(hardware, root / "run/control.sock", "wheel", 1000, 12)
+            group_name = grp.getgrgid(os.getgid()).gr_name
+            daemon = NitroDaemon(hardware, root / "run/control.sock", group_name, 1000, 12)
             daemon._response({"action": "manual", "cpu": 40, "gpu": 40})
             HardwareFixture.write(fixture.hwmon / "temp1_input", "86000")
             daemon._check_watchdog()
