@@ -1,0 +1,30 @@
+{
+  "schemaVersion": 1,
+  "id": "nitro.control",
+  "name": "Nitro Control",
+  "version": "1.0.0",
+  "author": "Nitro Control contributors",
+  "license": "MIT AND GPL-2.0-or-later",
+  "description": "Safe fan, temperature, and performance controls for Acer Nitro laptops",
+  "keywords": [
+    "acer",
+    "nitro",
+    "fan",
+    "temperature",
+    "performance",
+    "hwmon"
+  ],
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "Nitro Control",
+    "description": "Acer Nitro fan, temperature, and profile controls",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

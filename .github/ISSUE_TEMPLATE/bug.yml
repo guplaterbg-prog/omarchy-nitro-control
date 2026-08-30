@@ -1,0 +1,33 @@
+name: Bug report
+description: Report a problem on an already supported setup
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: input
+    id: model
+    attributes:
+      label: Laptop model
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Nitro Control version
+      placeholder: 1.0.0
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What happened?
+      description: Say what you selected, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: status
+    attributes:
+      label: Status output
+      description: Paste `nitroctl status`. Remove anything you do not want to share.
+    validations:
+      required: true

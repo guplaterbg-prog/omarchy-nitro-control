@@ -1,0 +1,2 @@
+# Patch context lines intentionally contain Git's leading space before tabs.
+driver/patches/*.patch whitespace=-trailing-space,-space-before-tab

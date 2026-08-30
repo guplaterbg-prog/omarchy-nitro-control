@@ -1,0 +1,90 @@
+From: Nitro Control contributors
+Subject: [PATCH] platform/x86: acer-wmi: add ANV16-71 PWM and restore auto
+
+Base: Linux v7.1.9 (ffc82ed665314ccf141abc4710830f3f424d98ea)
+---
+ drivers/platform/x86/acer-wmi.c | 34 ++++++++++++++++++++++++++++++++
+ 1 file changed, 34 insertions(+)
+
+diff --git a/drivers/platform/x86/acer-wmi.c b/drivers/platform/x86/acer-wmi.c
+index e0eaaefb1..cfece9c45 100644
+--- a/drivers/platform/x86/acer-wmi.c
++++ b/drivers/platform/x86/acer-wmi.c
+@@ -460,6 +460,11 @@ static struct quirk_entry quirk_acer_nitro_an515_58 = {
+ 	.pwm = 1,
+ };
+ 
++static struct quirk_entry quirk_acer_nitro_anv16_71 = {
++	.predator_v4 = 1,
++	.pwm = 1,
++};
++
+ static struct quirk_entry quirk_acer_predator_ph315_53 = {
+ 	.turbo = 1,
+ 	.cpu_fans = 1,
+@@ -662,6 +667,15 @@ static const struct dmi_system_id acer_quirks[] __initconst = {
+ 		},
+ 		.driver_data = &quirk_acer_nitro_an515_58,
+ 	},
++	{
++		.callback = dmi_matched,
++		.ident = "Acer Nitro ANV16-71",
++		.matches = {
++			DMI_MATCH(DMI_SYS_VENDOR, "Acer"),
++			DMI_MATCH(DMI_PRODUCT_NAME, "Nitro ANV16-71"),
++		},
++		.driver_data = &quirk_acer_nitro_anv16_71,
++	},
+ 	{
+ 		.callback = dmi_matched,
+ 		.ident = "Acer Predator PH315-53",
+@@ -1691,6 +1705,20 @@ static int WMID_gaming_set_fan_behavior(u16 fan_bitmap, enum acer_wmi_gaming_fan
+ 	return 0;
+ }
+ 
++static void acer_wmi_restore_automatic_fan_control(void)
++{
++	int err;
++
++	if (!has_cap(ACER_CAP_PWM))
++		return;
++
++	err = WMID_gaming_set_fan_behavior(ACER_GAMING_FAN_BEHAVIOR_CPU |
++					   ACER_GAMING_FAN_BEHAVIOR_GPU,
++					   ACER_WMID_FAN_MODE_AUTO);
++	if (err)
++		pr_warn("Unable to restore automatic fan control: %d\n", err);
++}
++
+ static int WMID_gaming_get_fan_behavior(u16 fan_bitmap, enum acer_wmi_gaming_fan_mode *mode)
+ {
+ 	acpi_status status;
+@@ -2814,6 +2842,8 @@ static int acer_platform_probe(struct platform_device *device)
+ 
+ static void acer_platform_remove(struct platform_device *device)
+ {
++	acer_wmi_restore_automatic_fan_control();
++
+ 	if (has_cap(ACER_CAP_MAILLED))
+ 		acer_led_exit();
+ 	if (has_cap(ACER_CAP_BRIGHTNESS))
+@@ -2831,6 +2861,8 @@ static int acer_suspend(struct device *dev)
+ 	if (!data)
+ 		return -ENOMEM;
+ 
++	acer_wmi_restore_automatic_fan_control();
++
+ 	if (has_cap(ACER_CAP_MAILLED)) {
+ 		get_u32(&value, ACER_CAP_MAILLED);
+ 		set_u32(LED_OFF, ACER_CAP_MAILLED);
+@@ -2874,6 +2906,8 @@ static void acer_platform_shutdown(struct platform_device *device)
+ {
+ 	struct acer_data *data = &interface->data;
+ 
++	acer_wmi_restore_automatic_fan_control();
++
+ 	if (!data)
+ 		return;
+ 
+-- 
+2.51.0

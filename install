@@ -1,0 +1,197 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+
+if (( EUID != 0 )); then
+  exec sudo -- "$project_dir/install" --target-user "${USER:?}"
+fi
+
+target_user=
+while (( $# > 0 )); do
+  case "$1" in
+    --target-user)
+      target_user=${2:-}
+      shift 2
+      ;;
+    *)
+      echo "Unknown option: $1" >&2
+      exit 2
+      ;;
+  esac
+done
+
+target_user=${target_user:-${SUDO_USER:-}}
+if [[ -z $target_user || $target_user == root ]] || ! id "$target_user" >/dev/null 2>&1; then
+  echo "Could not determine the desktop user safely." >&2
+  exit 1
+fi
+
+readonly kernel=$(uname -r)
+readonly access_group=$(id -gn "$target_user")
+readonly access_uid=$(id -u "$target_user")
+readonly library_dir=/usr/lib/nitro-control
+readonly config_file=/etc/nitro-control.conf
+readonly state_dir=/var/lib/nitro-control
+readonly driver_name=nitro-control-acer-wmi
+readonly driver_version=0.1.0
+readonly driver_source="$project_dir/driver/acer-wmi-anv16-0.1.0"
+readonly dkms_source="/usr/src/${driver_name}-${driver_version}"
+
+driver_added=0
+driver_installed=0
+
+dmi_is_nitro() {
+  local vendor model
+  [[ -r /sys/class/dmi/id/sys_vendor && -r /sys/class/dmi/id/product_name ]] || return 1
+  vendor=$(< /sys/class/dmi/id/sys_vendor)
+  model=$(< /sys/class/dmi/id/product_name)
+  [[ ${vendor,,} == acer && (${model,,} == nitro || ${model,,} == nitro\ *) ]]
+}
+
+restore_auto_direct() {
+  local hwmon path
+  dmi_is_nitro || return 0
+  for hwmon in /sys/class/hwmon/hwmon*; do
+    [[ -r $hwmon/name ]] || continue
+    [[ $(<"$hwmon/name") == acer ]] || continue
+    for path in "$hwmon"/pwm1_enable "$hwmon"/pwm2_enable; do
+      [[ -w $path ]] && printf '2\n' >"$path" || true
+    done
+  done
+}
+
+rollback() {
+  local status=$?
+  trap - EXIT INT TERM HUP
+  restore_auto_direct
+  if (( status != 0 )); then
+    echo "Installation failed; restoring automatic fan control." >&2
+    systemctl stop nitro-control.service 2>/dev/null || true
+    if (( driver_installed )) && [[ -d /sys/module/acer_wmi ]]; then
+      rmmod acer_wmi 2>/dev/null || true
+    fi
+    if (( driver_added )); then
+      dkms remove -m "$driver_name" -v "$driver_version" --all 2>/dev/null || true
+      depmod "$kernel" || true
+      modprobe acer_wmi 2>/dev/null || true
+    fi
+  fi
+  exit "$status"
+}
+trap rollback EXIT INT TERM HUP
+
+has_pwm_control() {
+  local hwmon
+  for hwmon in /sys/class/hwmon/hwmon*; do
+    [[ -r $hwmon/name ]] || continue
+    [[ $(<"$hwmon/name") == acer ]] || continue
+    [[ -e $hwmon/pwm1_enable && -e $hwmon/pwm2_enable ]] && return 0
+  done
+  return 1
+}
+
+verified_driver_package() {
+  local vendor=$1 model=$2 running_kernel=$3 bios=$4
+  python3 "$project_dir/driver/select_verified_driver.py" \
+    "$project_dir/driver/verified-models.json" \
+    "$vendor" "$model" "$running_kernel" "$bios"
+}
+
+install_driver_if_needed() {
+  local vendor model bios pkgbase verified_package verification_status
+
+  has_pwm_control && return 0
+  vendor=$(< /sys/class/dmi/id/sys_vendor)
+  model=$(< /sys/class/dmi/id/product_name)
+  bios=$(< /sys/class/dmi/id/bios_version)
+  if verified_package=$(verified_driver_package "$vendor" "$model" "$kernel" "$bios"); then
+    :
+  else
+    verification_status=$?
+    if (( verification_status == 3 )); then
+      echo "The bundled driver was not tested with this exact kernel and BIOS:" >&2
+      echo "  $vendor $model · kernel $kernel · BIOS $bios" >&2
+      echo "The plugin will install read-only; fan writes remain disabled." >&2
+      return 0
+    fi
+    echo "Could not verify the bundled driver registry." >&2
+    exit "$verification_status"
+  fi
+  if [[ -z $verified_package ]]; then
+    echo "No native PWM interface and no verified fallback for: $vendor $model" >&2
+    echo "The read-only plugin will still install; fan writes remain disabled." >&2
+    return 0
+  fi
+  if [[ $verified_package != "acer-wmi-anv16-0.1.0" ]]; then
+    echo "The compatibility registry names an unknown driver package: $verified_package" >&2
+    exit 1
+  fi
+
+  if ! (cd -- "$driver_source" && sha256sum --check --strict SHA256SUMS); then
+    echo "The bundled driver files failed their checksum verification." >&2
+    exit 1
+  fi
+
+  pkgbase=$(<"/usr/lib/modules/$kernel/pkgbase")
+  if ! command -v dkms >/dev/null || [[ ! -d /usr/lib/modules/$kernel/build ]]; then
+    pacman -S --needed --noconfirm dkms "${pkgbase}-headers"
+  fi
+
+  if dkms status -m "$driver_name" 2>/dev/null | grep -q . || [[ -e $dkms_source ]]; then
+    echo "$driver_name/$driver_version already exists; refusing to overwrite it." >&2
+    exit 1
+  fi
+
+  install -d -m 0755 "$dkms_source"
+  install -m 0644 \
+    "$driver_source/acer-wmi.c" \
+    "$driver_source/Makefile" \
+    "$driver_source/dkms.conf" \
+    "$dkms_source/"
+  dkms add -m "$driver_name" -v "$driver_version"
+  driver_added=1
+  dkms build -m "$driver_name" -v "$driver_version" -k "$kernel"
+  dkms install -m "$driver_name" -v "$driver_version" -k "$kernel"
+  driver_installed=1
+  depmod "$kernel"
+
+  [[ ! -d /sys/module/acer_wmi || $(< /sys/module/acer_wmi/refcnt) == 0 ]]
+  modprobe -r acer_wmi 2>/dev/null || true
+  modprobe acer_wmi
+  has_pwm_control
+  install -d -m 0755 "$state_dir"
+  printf '%s/%s\n' "$driver_name" "$driver_version" >"$state_dir/driver-installed"
+}
+
+install_driver_if_needed
+restore_auto_direct
+
+systemctl stop nitro-control.service 2>/dev/null || true
+install -d -m 0755 "$library_dir"
+install -m 0755 "$project_dir/backend/nitro_control.py" "$library_dir/nitro_control.py"
+install -m 0644 "$project_dir/driver/verified-models.json" "$library_dir/verified-models.json"
+install -m 0755 "$project_dir/bin/nitroctl" /usr/bin/nitroctl
+install -m 0644 "$project_dir/systemd/nitro-control.service" /etc/systemd/system/nitro-control.service
+install -d -m 0755 "$state_dir"
+
+{
+  printf 'NITRO_CONTROL_GROUP=%q\n' "$access_group"
+  printf 'NITRO_CONTROL_UID=%q\n' "$access_uid"
+  printf 'NITRO_CONTROL_MANUAL_TIMEOUT=12\n'
+} >"$config_file"
+chmod 0644 "$config_file"
+
+systemctl daemon-reload
+systemctl enable --now nitro-control.service
+
+for _attempt in 1 2 3 4 5; do
+  [[ -S /run/nitro-control/control.sock ]] && break
+  sleep 1
+done
+[[ -S /run/nitro-control/control.sock ]]
+runuser -u "$target_user" -- /usr/bin/nitroctl status >/dev/null
+
+trap - EXIT INT TERM HUP
+echo "Nitro Control backend installed for $target_user."
+echo "The fans are in firmware automatic mode."

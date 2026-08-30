@@ -1,0 +1,55 @@
+#!/usr/bin/env python3
+"""Produce a serial-number-free compatibility report for a Nitro laptop."""
+
+from __future__ import annotations
+
+import json
+import os
+import platform
+import sys
+from pathlib import Path
+
+
+def load_hardware_class():
+    candidates = [Path("/usr/lib/nitro-control"), Path(__file__).resolve().parent.parent / "backend"]
+    for candidate in candidates:
+        if (candidate / "nitro_control.py").is_file():
+            sys.path.insert(0, str(candidate))
+            from nitro_control import NitroHardware  # pylint: disable=import-outside-toplevel
+
+            return NitroHardware
+    raise RuntimeError("Nitro Control hardware library is unavailable")
+
+
+def main() -> int:
+    status = load_hardware_class()().status()
+    report = {
+        "schemaVersion": 1,
+        "system": {
+            "vendor": status.get("vendor", ""),
+            "model": status.get("model", ""),
+            "biosVersion": status.get("biosVersion", ""),
+            "kernel": platform.release(),
+        },
+        "interfaces": {
+            "wmiGuids": sorted(path.name for path in Path("/sys/bus/wmi/devices").glob("*")),
+            "sensorAvailable": status.get("sensorAvailable", False),
+            "controlAvailable": status.get("controlAvailable", False),
+            "hwmonName": status.get("hwmonName", ""),
+            "controlProvider": status.get("controlProvider", ""),
+            "mode": status.get("mode", "unavailable"),
+            "profileChoices": status.get("profileChoices", []),
+        },
+        "readings": {
+            "temperatures": status.get("temperatures", {}),
+            "fans": status.get("fans", {}),
+        },
+    }
+    # Deliberately excludes serial numbers, UUIDs, hostnames, usernames, and network data.
+    json.dump(report, sys.stdout, indent=2, sort_keys=True)
+    sys.stdout.write("\n")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

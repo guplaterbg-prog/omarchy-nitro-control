@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""Client for the Nitro Control backend, with a read-only sysfs fallback."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import socket
+import sys
+from pathlib import Path
+from typing import Any
+
+
+def load_hardware_class():
+    candidates = [
+        Path("/usr/lib/nitro-control"),
+        Path(__file__).resolve().parent.parent / "backend",
+    ]
+    for candidate in candidates:
+        if (candidate / "nitro_control.py").is_file():
+            sys.path.insert(0, str(candidate))
+            from nitro_control import NitroHardware  # pylint: disable=import-outside-toplevel
+
+            return NitroHardware
+    raise RuntimeError("Nitro Control hardware library is unavailable")
+
+
+def send_request(socket_path: Path, request: dict[str, Any]) -> dict[str, Any]:
+    payload = json.dumps(request, separators=(",", ":")).encode("utf-8") + b"\n"
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+        client.settimeout(3.0)
+        client.connect(str(socket_path))
+        client.sendall(payload)
+        raw = b""
+        while b"\n" not in raw and len(raw) <= 65536:
+            chunk = client.recv(4096)
+            if not chunk:
+                break
+            raw += chunk
+    response = json.loads(raw.decode("utf-8"))
+    if not isinstance(response, dict):
+        raise RuntimeError("backend returned an invalid response")
+    return response
+
+
+def readonly_status(error: Exception | None = None) -> dict[str, Any]:
+    try:
+        status = load_hardware_class()().status()
+        status.update({"ok": True, "backend": "missing"})
+        if error is not None:
+            status["backendError"] = str(error)
+        return status
+    except Exception as exc:  # status must remain useful during incomplete setup
+        return {
+            "ok": False,
+            "backend": "missing",
+            "sensorAvailable": False,
+            "controlAvailable": False,
+            "error": str(exc),
+        }
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="nitroctl", description="Acer Nitro fan and profile control")
+    parser.add_argument("--socket", default="/run/nitro-control/control.sock")
+    parser.add_argument("--pretty", action="store_true", help="indent JSON output")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+
+    status = subparsers.add_parser("status", help="show temperatures, fan RPM, modes, and profiles")
+    status.add_argument("--heartbeat", action="store_true", help="keep an active manual mode alive")
+
+    subparsers.add_parser("automatic", aliases=["auto"], help="return both fans to firmware control")
+    subparsers.add_parser("maximum", aliases=["max"], help="run both fans at maximum")
+
+    manual = subparsers.add_parser("manual", help="set verified manual fan percentages")
+    manual.add_argument("--cpu", type=int, required=True)
+    manual.add_argument("--gpu", type=int, required=True)
+
+    profile = subparsers.add_parser("profile", help="set an available platform profile")
+    profile.add_argument("name")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    action = {
+        "auto": "automatic",
+        "max": "maximum",
+    }.get(args.command, args.command)
+    request: dict[str, Any] = {"action": action}
+    if action == "status":
+        request["heartbeat"] = args.heartbeat
+    elif action == "manual":
+        request.update({"cpu": args.cpu, "gpu": args.gpu})
+    elif action == "profile":
+        request["profile"] = args.name
+
+    try:
+        response = send_request(Path(args.socket), request)
+    except (FileNotFoundError, PermissionError, ConnectionError, TimeoutError, OSError, ValueError) as exc:
+        if action == "status":
+            response = readonly_status(exc)
+        else:
+            response = {"ok": False, "backend": "missing", "error": f"backend unavailable: {exc}"}
+
+    print(json.dumps(response, indent=2 if args.pretty else None, sort_keys=args.pretty))
+    return 0 if response.get("ok") else 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

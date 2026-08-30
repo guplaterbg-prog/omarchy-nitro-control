@@ -1,0 +1,48 @@
+{
+  "schemaVersion": 1,
+  "policy": {
+    "nativeKernelPwm": "supported when detected at runtime",
+    "bundledFallbacks": "exact DMI match and real-hardware validation required"
+  },
+  "models": [
+    {
+      "vendor": "Acer",
+      "product": "Nitro AN515-58",
+      "supportTier": "upstream-kernel",
+      "driverPackage": "",
+      "capabilities": [
+        "platform-profile",
+        "temperature",
+        "fan-rpm",
+        "fan-pwm"
+      ],
+      "notes": "Supported by the upstream Linux acer-wmi model table; runtime detection remains authoritative."
+    },
+    {
+      "vendor": "Acer",
+      "product": "Nitro ANV16-71",
+      "supportTier": "verified-bundled-fallback",
+      "driverPackage": "acer-wmi-anv16-0.1.0",
+      "kernelBaseline": "7.1.9",
+      "kernelsTested": [
+        "7.1.9-arch1-2"
+      ],
+      "biosTested": [
+        "V1.09"
+      ],
+      "capabilities": [
+        "platform-profile",
+        "temperature",
+        "fan-rpm",
+        "fan-pwm"
+      ]
+    }
+  ],
+  "readableHwmonNames": [
+    "acer",
+    "acer_nitro_ec"
+  ],
+  "writableHwmonNames": [
+    "acer"
+  ]
+}

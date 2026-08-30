@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+if (( EUID != 0 )); then
+  exec sudo -- "$project_dir/uninstall"
+fi
+
+readonly driver_name=nitro-control-acer-wmi
+readonly driver_version=0.1.0
+readonly kernel=$(uname -r)
+
+if [[ -x /usr/bin/nitroctl ]]; then
+  /usr/bin/nitroctl automatic >/dev/null 2>&1 || true
+fi
+systemctl disable --now nitro-control.service 2>/dev/null || true
+
+if [[ -f /var/lib/nitro-control/driver-installed ]] && \
+   grep -qx "$driver_name/$driver_version" /var/lib/nitro-control/driver-installed; then
+  if [[ -d /sys/module/acer_wmi && $(< /sys/module/acer_wmi/refcnt) == 0 ]]; then
+    modprobe -r acer_wmi
+  fi
+  dkms remove -m "$driver_name" -v "$driver_version" --all
+  rm -rf -- "/usr/src/${driver_name}-${driver_version}"
+  depmod "$kernel"
+  modprobe acer_wmi
+fi
+
+rm -f -- /etc/systemd/system/nitro-control.service /etc/nitro-control.conf /usr/bin/nitroctl
+rm -rf -- /usr/lib/nitro-control /var/lib/nitro-control
+systemctl daemon-reload
+echo "Nitro Control backend removed; the fans are under firmware control."

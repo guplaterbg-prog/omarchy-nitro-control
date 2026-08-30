@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.ko
+*.mod
+*.mod.c
+*.mod.o
+*.o
+*.cmd
+.module-common.o
+Module.symvers
+modules.order
+driver/**/.tmp_versions/
