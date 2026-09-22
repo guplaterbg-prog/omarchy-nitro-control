@@ -17,6 +17,7 @@ Panel {
   property string localError: ""
   property int cpuManual: 40
   property int gpuManual: 40
+  property var fps: null
   property string page: "controls"
   readonly property int maxProcessOutputChars: 32768
 
@@ -27,8 +28,11 @@ Panel {
   readonly property string contentFontFamily: root.bar ? root.bar.fontFamily : Style.font.family
   readonly property bool backendReady: state.backend === "ready"
   readonly property bool canControl: backendReady && state.isNitro && state.controlAvailable
+  readonly property string barText: Model.barText(root.state, root.showTemperature, root.showGpuTemperature, root.showFps, root.fps)
   readonly property bool busy: actionProc.running
   readonly property bool showTemperature: setting("showTemperature", true) !== false
+  readonly property bool showGpuTemperature: setting("showGpuTemperature", true) !== false
+  readonly property bool showFps: setting("showFps", true) === true
   readonly property bool syncFans: setting("syncFans", true) !== false
   readonly property string barAlignment: String(setting("alignment", "right"))
 
@@ -108,6 +112,14 @@ Panel {
 
   function toggleTemperature() {
     persistSettings({ showTemperature: !root.showTemperature })
+  }
+
+  function toggleGpuTemperature() {
+    persistSettings({ showGpuTemperature: !root.showGpuTemperature })
+  }
+
+  function toggleFps() {
+    persistSettings({ showFps: !root.showFps })
   }
 
   function toggleSyncFans() {
@@ -260,12 +272,52 @@ Panel {
     onTriggered: root.refresh()
   }
 
+  Process {
+    id: fpsProc
+    command: []
+    clearEnvironment: true
+    environment: ({ "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8", "LC_ALL": "C.UTF-8" })
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: root.fps = Model.parseFps(text)
+    }
+  }
+
+  Timer {
+    id: fpsTimer
+    interval: 2000
+    running: root.showFps
+    repeat: true
+    onTriggered: if (!fpsProc.running) {
+      fpsProc.command = [pluginDir + "/bin/nitrofps"]
+      fpsProc.running = true
+    }
+  }
+
+  TextMetrics {
+    id: barGlyphMetrics
+    font.family: root.bar ? root.bar.fontFamily : Style.font.family
+    font.pixelSize: Style.bar.iconFont
+    text: root.barText
+  }
+
   BarIconButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: Model.barText(root.state, root.showTemperature)
-    slotSize: root.showTemperature && !vertical ? Style.bar.iconSlot * 1.8 : Style.bar.iconSlot
+    text: root.barText
+    // The icon slot is a fixed canvas sized for a single glyph. When extra
+    // text is shown (temperatures, FPS) grow the slot to the painted width so
+    // the module reserves its real space instead of overflowing into the
+    // neighbouring tray icons.
+    slotSize: {
+      var wide = root.showTemperature || root.showFps
+      if (!vertical && wide) {
+        var fitted = Math.ceil(barGlyphMetrics.advanceWidth) + 2 * Style.space(6)
+        return Math.max(Style.bar.iconSlot * 1.9, fitted)
+      }
+      return Style.bar.iconSlot
+    }
     tooltipText: statusReady ? "Nitro Control · " + Model.statusLine(root.state) : "Nitro Control"
     onPressed: function(mouseButton) {
       if (mouseButton === Qt.RightButton && root.canControl) root.setAutomatic()
@@ -565,6 +617,28 @@ Panel {
               accent: root.bar ? root.bar.urgent : Color.accent
               fontFamily: root.contentFontFamily
               onClicked: root.toggleTemperature()
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Show GPU temperature"
+              description: "Show the GPU temperature next to the CPU one."
+              checked: root.showGpuTemperature
+              foreground: root.contentForeground
+              accent: root.bar ? root.bar.urgent : Color.accent
+              fontFamily: root.contentFontFamily
+              onClicked: root.toggleGpuTemperature()
+            }
+
+            Toggle {
+              width: parent.width
+              label: "Show FPS"
+              description: "Show FPS from MangoHud in gamescope sessions (needs MangoHud log_interval)."
+              checked: root.showFps
+              foreground: root.contentForeground
+              accent: root.bar ? root.bar.urgent : Color.accent
+              fontFamily: root.contentFontFamily
+              onClicked: root.toggleFps()
             }
 
             PanelSectionHeader {

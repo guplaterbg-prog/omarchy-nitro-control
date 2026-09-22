@@ -23,7 +23,7 @@ jobs:
         run: node tests/model.test.mjs
 
       - name: Check shell syntax
-        run: bash -n install uninstall bin/nitroctl bin/nitro-report
+        run: bash -n install uninstall bin/nitroctl bin/nitro-report bin/nitrofps
 
       - name: Check JSON files
         run: |

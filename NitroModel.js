@@ -39,6 +39,7 @@ function emptyState() {
     hwmonName: "",
     controlProvider: "",
     temperatures: { cpu: null, gpu: null, system: null },
+    fps: null,
     fans: {
       cpu: { rpm: null, percent: null },
       gpu: { rpm: null, percent: null }
@@ -99,6 +100,8 @@ function parseStatus(raw, previous) {
     gpu: boundedNumber(temperatures.gpu, -50, 150),
     system: boundedNumber(temperatures.system, -50, 150)
   }
+  state.fps = parsed.fps === undefined || parsed.fps === null ? null
+    : boundedNumber(parsed.fps, 0, 1000)
   state.fans = {
     cpu: {
       rpm: boundedNumber(cpuFan.rpm, 0, 100000),
@@ -137,6 +140,15 @@ function percent(value) {
   return number === null ? "—" : Math.round(number) + "%"
 }
 
+function fpsText(value) {
+  var number = boundedNumber(value, 0, 1000)
+  return number === null ? "—" : Math.round(number)
+}
+
+function parseFps(raw) {
+  return boundedNumber(plainText(raw, 16), 0, 1000)
+}
+
 function modeTitle(mode) {
   if (mode === "automatic") return "Automatic"
   if (mode === "maximum") return "Maximum"
@@ -152,10 +164,16 @@ function statusLine(state) {
   return modeTitle(state.mode) + " · " + (plainText(state.profile, 64) || "no profile")
 }
 
-function barText(state, showTemperature) {
+function barText(state, showTemperature, showGpuTemperature, showFps, fps) {
   var icon = state.mode === "maximum" ? "󰈸" : "󰈐"
-  if (!state.sensorAvailable) return icon + " !"
-  return showTemperature ? icon + " " + temperature(state.temperatures.cpu) : icon
+  if (!state.sensorAvailable && fps === null) return icon + " !"
+  var parts = [icon]
+  if (showTemperature !== false && state.temperatures.cpu !== null)
+    parts.push("CPU " + temperature(state.temperatures.cpu))
+  if (showGpuTemperature && state.temperatures.gpu !== null)
+    parts.push("GPU " + temperature(state.temperatures.gpu))
+  if (showFps && fps !== null) parts.push("FPS " + fpsText(fps))
+  return parts.join("  ")
 }
 
 function clampManual(value) {
@@ -193,6 +211,8 @@ if (typeof module !== "undefined") {
     temperature: temperature,
     rpm: rpm,
     percent: percent,
+    fpsText: fpsText,
+    parseFps: parseFps,
     modeTitle: modeTitle,
     statusLine: statusLine,
     barText: barText,

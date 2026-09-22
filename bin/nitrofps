@@ -1,0 +1,82 @@
+#!/bin/sh
+# Read the current FPS from MangoHud's benchmark log.
+#
+# MangoHud (>=0.7) writes one csv per logging session: <output_folder>/<program>_<time>.csv.
+# With log_interval set, a row is appended every interval while the game is
+# running (autostart_log or a Shift+F2 toggle starts logging). Files begin with
+# a system-info header, then a frame-metrics header ("fps", "frametime", ...).
+# This helper picks the most recently modified csv and prints its latest FPS
+# value, or nothing when no fresh log exists.
+#
+# Usage: nitrofps [path]
+#   path   optional log file to read instead of scanning ~/.local/share/MangoHud
+
+set -u
+
+LOG="${1:-}"
+
+DEFAULT_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/MangoHud"
+
+if [ -z "$LOG" ]; then
+  if [ -f "$DEFAULT_DIR/MangoHud.log" ]; then
+    LOG="$DEFAULT_DIR/MangoHud.log"
+  elif [ -f "$HOME/.mangohud.log" ]; then
+    LOG="$HOME/.mangohud.log"
+  elif [ -f /tmp/MangoHud.log ]; then
+    LOG=/tmp/MangoHud.log
+  elif [ -d "$DEFAULT_DIR" ]; then
+    LOG=$(ls -1t "$DEFAULT_DIR"/*.csv 2>/dev/null | grep -v '_summary\.csv$' | head -n 1)
+  fi
+fi
+
+[ -n "$LOG" ] && [ -f "$LOG" ] || exit 0
+
+# Only report when the log is actively being written (a game is running).
+now=$(date +%s)
+mtime=$(stat -c %Y "$LOG" 2>/dev/null) || exit 0
+[ $((now - mtime)) -gt 8 ] && exit 0
+
+# MangoHud logs start with a system-info header and its values; the frame
+# metrics header (containing "fps") comes after those.
+header_lineno=0
+line_no=0
+while IFS= read -r line; do
+  line_no=$((line_no + 1))
+  case "$line" in
+    fps,*) header_lineno=$line_no ;;
+    *,fps,*) header_lineno=$line_no ;;
+  esac
+done < "$LOG"
+
+if [ "$header_lineno" -gt 0 ]; then
+  header=$(sed -n "${header_lineno}p" "$LOG")
+else
+  header=$(sed -n '1p' "$LOG")
+fi
+last=$(tail -n 1 "$LOG") || exit 0
+
+# Find the column named fps in the frame-metrics header (lowercase in MangoHud).
+col=-1
+i=0
+old_ifs=$IFS
+IFS=','
+for field in $header; do
+  case "$field" in
+    fps) col=$i ;;
+  esac
+  i=$((i + 1))
+done
+IFS=$old_ifs
+
+if [ "$col" -ge 0 ]; then
+  val=$(printf '%s' "$last" | cut -d, -f$((col + 1)) | tr -d ' ')
+else
+  # Fallback: fps is the first column of every data row.
+  val=$(printf '%s' "$last" | grep -oE '[0-9]+(\.[0-9]+)?' | head -n 1)
+fi
+
+case "$val" in
+  ''|*[!0-9.]*) exit 0 ;;
+esac
+
+awk -v value="$val" 'BEGIN { printf "%d\n", value + 0.5 }'
