@@ -44,6 +44,13 @@ class NitroHardware:
         "acer_nitro_ec": "acer-nitro-ec",
     }
     WRITABLE_HWMON_NAMES = {"acer"}
+    # The "Gaming-WMI" fan interface exported by in-tree Acer WMI drivers
+    # (e.g. asense_rgb) for Nitro laptops that expose no hwmon PWM files:
+    # cpu_mode/gpu_mode take the familiar 0=Maximum 1=Manual 2=Automatic
+    # codes and cpu_speed/gpu_speed take fan percentages directly (0-100).
+    GAMING_WMI_GUID = "7A4DDFE7-5B5D-40B4-8595-4408E0CC7F56"
+    GAMING_WMI_PROVIDER = "gaming-wmi"
+    GAMING_WMI_FILES = ("cpu_mode", "gpu_mode", "cpu_speed", "gpu_speed")
 
     def __init__(self, sys_root: str | Path | None = None) -> None:
         self.sys_root = Path(sys_root or os.environ.get("NITRO_SYS_ROOT", "/sys"))
@@ -116,6 +123,39 @@ class NitroHardware:
         candidate = path or self.hwmon_path()
         return self._text(candidate / "name") if candidate else ""
 
+    def gaming_wmi_base(self) -> Path | None:
+        root = self.sys_root / "bus/wmi/devices"
+        for device in sorted(root.glob(f"{self.GAMING_WMI_GUID}-*")):
+            base = device / "gaming_fan"
+            if all((base / name).is_file() for name in self.GAMING_WMI_FILES):
+                return base
+        return None
+
+    def _provider(self) -> dict[str, Any] | None:
+        """The writable fan provider in priority order, or None for read-only."""
+        hwmon = self.hwmon_path()
+        if hwmon is not None and self.hwmon_name(hwmon) in self.WRITABLE_HWMON_NAMES:
+            pwm = [hwmon / "pwm1", hwmon / "pwm2"]
+            enables = [hwmon / "pwm1_enable", hwmon / "pwm2_enable"]
+            if all(path.exists() for path in pwm + enables):
+                return {
+                    "kind": "pwm",
+                    "hwmon": hwmon,
+                    "enables": enables,
+                    "values": pwm,
+                    "percentScale": 255,
+                }
+        base = self.gaming_wmi_base()
+        if base is not None:
+            return {
+                "kind": self.GAMING_WMI_PROVIDER,
+                "hwmon": hwmon,
+                "enables": [base / "cpu_mode", base / "gpu_mode"],
+                "values": [base / "cpu_speed", base / "gpu_speed"],
+                "percentScale": 100,
+            }
+        return None
+
     def profile_path(self) -> Path | None:
         root = self.sys_root / "class/platform-profile"
         for path in sorted(root.glob("platform-profile-*")):
@@ -123,26 +163,24 @@ class NitroHardware:
                 return path
         return None
 
-    def _controls(self) -> tuple[Path, list[Path], list[Path]]:
+    def _controls(self) -> dict[str, Any]:
+        provider = self._provider()
+        if provider is not None:
+            return provider
         hwmon = self.hwmon_path()
         if hwmon is None:
             raise NitroError("the Acer hwmon interface is unavailable")
         if self.hwmon_name(hwmon) not in self.WRITABLE_HWMON_NAMES:
             raise NitroError("this hwmon provider is monitoring-only in v1")
-
-        pwm = [hwmon / "pwm1", hwmon / "pwm2"]
-        enables = [hwmon / "pwm1_enable", hwmon / "pwm2_enable"]
-        if not all(path.exists() for path in pwm + enables):
-            raise NitroError("fan RPM is available, but kernel PWM control is unavailable")
-        return hwmon, pwm, enables
+        raise NitroError("fan RPM is available, but kernel PWM control is unavailable")
 
     @staticmethod
-    def _percent_to_pwm(percent: int) -> int:
-        return round(percent * 255 / 100)
+    def _percent_to_raw(percent: int, scale: int) -> int:
+        return round(percent * scale / 100)
 
     @staticmethod
-    def _pwm_to_percent(value: int | None) -> int | None:
-        return None if value is None else round(value * 100 / 255)
+    def _raw_to_percent(value: int | None, scale: int) -> int | None:
+        return None if value is None else round(value * 100 / scale)
 
     def status(self) -> dict[str, Any]:
         hwmon = self.hwmon_path()
@@ -178,23 +216,26 @@ class NitroHardware:
             result["fans"]["cpu"]["rpm"] = self._integer(hwmon / "fan1_input")
             result["fans"]["gpu"]["rpm"] = self._integer(hwmon / "fan2_input")
 
-            required = [hwmon / name for name in ("pwm1", "pwm2", "pwm1_enable", "pwm2_enable")]
-            result["controlAvailable"] = (
-                self.hwmon_name(hwmon) in self.WRITABLE_HWMON_NAMES
-                and all(path.exists() for path in required)
+        provider = self._provider()
+        if provider is not None:
+            result["controlAvailable"] = True
+            result["controlProvider"] = (
+                provider["kind"]
+                if provider["kind"] == self.GAMING_WMI_PROVIDER
+                else self.HWMON_PROVIDERS.get(self.hwmon_name(provider["hwmon"]), "")
             )
-            if result["controlAvailable"]:
-                cpu_pwm = self._integer(hwmon / "pwm1")
-                gpu_pwm = self._integer(hwmon / "pwm2")
-                cpu_mode = self._integer(hwmon / "pwm1_enable")
-                gpu_mode = self._integer(hwmon / "pwm2_enable")
-                result["fans"]["cpu"]["percent"] = self._pwm_to_percent(cpu_pwm)
-                result["fans"]["gpu"]["percent"] = self._pwm_to_percent(gpu_pwm)
-                if cpu_mode == gpu_mode and cpu_mode in self.MODE_NAMES:
-                    result["modeCode"] = cpu_mode
-                    result["mode"] = self.MODE_NAMES[cpu_mode]
-                else:
-                    result["mode"] = "mixed"
+            scale = provider["percentScale"]
+            cpu_raw = self._integer(provider["values"][0])
+            gpu_raw = self._integer(provider["values"][1])
+            cpu_mode = self._integer(provider["enables"][0])
+            gpu_mode = self._integer(provider["enables"][1])
+            result["fans"]["cpu"]["percent"] = self._raw_to_percent(cpu_raw, scale)
+            result["fans"]["gpu"]["percent"] = self._raw_to_percent(gpu_raw, scale)
+            if cpu_mode == gpu_mode and cpu_mode in self.MODE_NAMES:
+                result["modeCode"] = cpu_mode
+                result["mode"] = self.MODE_NAMES[cpu_mode]
+            else:
+                result["mode"] = "mixed"
 
         if profile_dir is not None:
             result["profile"] = self._text(profile_dir / "profile")
@@ -221,9 +262,10 @@ class NitroHardware:
         if not self.is_nitro:
             return False
         try:
-            _, _, enables = self._controls()
+            provider = self._controls()
         except NitroError:
             return False
+        enables = provider["enables"]
 
         ok = True
         for path in enables:
@@ -245,14 +287,12 @@ class NitroHardware:
 
     def set_automatic(self) -> dict[str, Any]:
         self._require_safe_target()
-        _, _, enables = self._controls()
-        self._write_mode(enables, 2)
+        self._write_mode(self._controls()["enables"], 2)
         return self.status()
 
     def set_maximum(self) -> dict[str, Any]:
         self._require_safe_target()
-        _, _, enables = self._controls()
-        self._write_mode(enables, 0)
+        self._write_mode(self._controls()["enables"], 0)
         return self.status()
 
     def set_manual(self, cpu_percent: int, gpu_percent: int) -> dict[str, Any]:
@@ -277,22 +317,29 @@ class NitroHardware:
                 f"manual control is blocked at {self.MAX_MANUAL_TEMPERATURE_C}°C or higher"
             )
 
-        _, pwm, enables = self._controls()
-        values = [self._percent_to_pwm(cpu_percent), self._percent_to_pwm(gpu_percent)]
+        provider = self._controls()
+        enables = provider["enables"]
+        values = provider["values"]
+        raw = [
+            self._percent_to_raw(cpu_percent, provider["percentScale"]),
+            self._percent_to_raw(gpu_percent, provider["percentScale"]),
+        ]
         try:
             # Enter maximum first so a partial transition always fails toward cooling.
             self._write_mode(enables, 0)
-            for path, value in zip(pwm, values, strict=True):
+            for path, value in zip(values, raw, strict=True):
                 self._write(path, value)
             self._write_mode(enables, 1)
             # Some Acer firmware only latches custom values after entering manual mode.
-            for path, value in zip(pwm, values, strict=True):
+            for path, value in zip(values, raw, strict=True):
                 self._write(path, value)
 
             modes = [self._integer(path) for path in enables]
-            speeds = [self._integer(path) for path in pwm]
-            if modes != [1, 1] or speeds != values:
-                raise NitroError(f"manual control verification failed: modes={modes}, pwm={speeds}")
+            speeds = [self._integer(path) for path in values]
+            if modes != [1, 1] or speeds != raw:
+                raise NitroError(
+                    f"manual control verification failed: modes={modes}, speeds={speeds}"
+                )
         except Exception:
             self.restore_automatic(fallback_to_maximum=True)
             raise

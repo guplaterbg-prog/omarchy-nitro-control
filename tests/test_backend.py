@@ -134,6 +134,96 @@ class NitroHardwareTests(unittest.TestCase):
             self.hardware.set_profile("turbo")
 
 
+class GamingWmiFixture:
+    GAMING_WMI_GUID = "7A4DDFE7-5B5D-40B4-8595-4408E0CC7F56"
+
+    def __init__(self, root: Path, model: str = "Nitro AN17-51") -> None:
+        self.root = root
+        dmi = root / "class/dmi/id"
+        hwmon = root / "class/hwmon/hwmon0"
+        profile = root / "class/platform-profile/platform-profile-0"
+        gaming = root / "bus/wmi/devices" / f"{self.GAMING_WMI_GUID}-8" / "gaming_fan"
+        dmi.mkdir(parents=True)
+        hwmon.mkdir(parents=True)
+        profile.mkdir(parents=True)
+        gaming.mkdir(parents=True)
+
+        self.write(dmi / "sys_vendor", "Acer")
+        self.write(dmi / "product_name", model)
+        self.write(dmi / "bios_version", "V1.12")
+        self.write(hwmon / "name", "acer")
+        self.write(hwmon / "temp1_input", "62000")
+        self.write(hwmon / "temp2_input", "51000")
+        self.write(hwmon / "temp3_input", "44000")
+        self.write(hwmon / "fan1_input", "2000")
+        self.write(hwmon / "fan2_input", "2100")
+        self.write(profile / "name", "acer-wmi")
+        self.write(profile / "profile", "performance")
+        self.write(profile / "choices", "low-power quiet balanced balanced-performance performance")
+        self.write(gaming / "cpu_mode", "2")
+        self.write(gaming / "gpu_mode", "2")
+        self.write(gaming / "cpu_speed", "0")
+        self.write(gaming / "gpu_speed", "0")
+        self.gaming = gaming
+        self.hwmon = hwmon
+        self.profile = profile
+
+    @staticmethod
+    def write(path: Path, value: str) -> None:
+        path.write_text(value + "\n", encoding="utf-8")
+
+
+class NitroGamingWmiTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.fixture = GamingWmiFixture(self.root)
+        self.hardware = NitroHardware(self.root)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def test_gaming_wmi_provider_enables_control_without_hwmon_pwm(self) -> None:
+        status = self.hardware.status()
+        self.assertTrue(status["isNitro"])
+        self.assertTrue(status["sensorAvailable"])
+        self.assertTrue(status["controlAvailable"])
+        self.assertEqual(status["controlProvider"], "gaming-wmi")
+        self.assertEqual(status["mode"], "automatic")
+        self.assertEqual(status["temperatures"], {"cpu": 62, "gpu": 51, "system": 44})
+        self.assertEqual(status["fans"]["cpu"]["rpm"], 2000)
+        self.assertEqual(status["fans"]["gpu"]["rpm"], 2100)
+
+    def test_gaming_wmi_manual_uses_percent_speeds_and_recovers(self) -> None:
+        status = self.hardware.set_manual(35, 55)
+        self.assertEqual(status["mode"], "manual")
+        self.assertEqual(status["fans"]["cpu"]["percent"], 35)
+        self.assertEqual(status["fans"]["gpu"]["percent"], 55)
+        self.assertEqual(self.read_mode(self.fixture.gaming / "cpu_mode"), "1")
+        self.assertEqual(self.read_mode(self.fixture.gaming / "cpu_speed"), "35")
+        self.assertEqual(self.read_mode(self.fixture.gaming / "gpu_speed"), "55")
+
+        status = self.hardware.set_automatic()
+        self.assertEqual(status["mode"], "automatic")
+        self.assertEqual(self.read_mode(self.fixture.gaming / "cpu_mode"), "2")
+        self.assertEqual(self.read_mode(self.fixture.gaming / "gpu_mode"), "2")
+
+    def test_gaming_wmi_maximum_uses_mode_zero(self) -> None:
+        status = self.hardware.set_maximum()
+        self.assertEqual(status["mode"], "maximum")
+        self.assertEqual(self.read_mode(self.fixture.gaming / "cpu_mode"), "0")
+        self.assertEqual(self.read_mode(self.fixture.gaming / "gpu_mode"), "0")
+
+    def test_gaming_wmi_manual_is_blocked_at_thermal_limit(self) -> None:
+        GamingWmiFixture.write(self.fixture.hwmon / "temp1_input", "86000")
+        with self.assertRaisesRegex(NitroError, "85°C"):
+            self.hardware.set_manual(40, 40)
+
+    @staticmethod
+    def read_mode(path: Path) -> str:
+        return path.read_text(encoding="utf-8").strip()
+
+
 class NitroWatchdogTests(unittest.TestCase):
     def test_expired_manual_session_restores_automatic(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
