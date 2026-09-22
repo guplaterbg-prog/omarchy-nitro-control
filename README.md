@@ -167,6 +167,13 @@ sha256sum --check --strict release-manifest.sha256
 - [Architecture](docs/architecture.md)
 - [Contributing](CONTRIBUTING.md)
 
+## Acknowledgments
+
+The 1.0.2 additions in this fork (Acer Gaming-WMI fan provider, MangoHud FPS
+readout, GPU temperature toggle, and their documentation) were developed with
+the assistance of an AI coding assistant, tested on Acer Nitro AN17-51.
+Original v1.0 by the Nitro Control contributors.
+
 ## License
 
 The plugin and backend are MIT licensed. Bundled Linux kernel driver source is
