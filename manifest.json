@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "nitro.control",
   "name": "Nitro Control",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "author": "Nitro Control contributors",
   "license": "MIT AND GPL-2.0-or-later",
   "description": "Safe fan, temperature, and performance controls for Acer Nitro laptops",
@@ -12,7 +12,9 @@
     "fan",
     "temperature",
     "performance",
-    "hwmon"
+    "hwmon",
+    "gaming-wmi",
+    "fps"
   ],
   "kinds": [
     "bar-widget"

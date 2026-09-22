@@ -1,5 +1,16 @@
 # Changelog
 
+## 1.0.2 - 2026-09-22
+
+- Fan control through the Acer **Gaming-WMI** interface for Nitros without
+  hwmon PWM (modes 0=Maximum 1=Manual 2=Auto, speeds 0-100). Detected at
+  runtime; tested on a Nitro AN17-51.
+- **FPS in the bar**: the widget reads the newest MangoHud benchmark log and
+  shows live FPS next to the temperatures (Settings → Show FPS). Logs fresh
+  only while a game runs, so the readout clears itself after closing the game.
+- New GPU temperature toggle for the bar readout.
+- Docs: Gaming-WMI provider, MangoHud FPS setup, AN17-51 compatibility.
+
 ## 1.0.1 - 2026-09-02
 
 - Stage a root-owned, no-follow, digest-verified release snapshot before any

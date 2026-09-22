@@ -12,9 +12,26 @@ The safe default is **Automatic**.
 | What your laptop has | What Nitro Control does |
 |---|---|
 | Official kernel `acer_wmi` PWM controls | Full fan control |
+| Acer Gaming-WMI fan control (see below) | Full fan control via the WMI interface |
 | Tested ANV16-71 kernel/BIOS without PWM | Installs the tested v1 fallback |
 | Temperatures and RPM, but no PWM | Shows information; does not write |
 | Unknown hardware | Refuses fan writes |
+
+### Acer Gaming-WMI laptops (Nitro AN17, AN16 and similar)
+
+Newer Nitros expose no hwmon `pwm1/pwm2` files. Instead the in-tree Acer
+drivers (and the ASense kernel driver) export a **Gaming-WMI** fan interface:
+
+```text
+/sys/bus/wmi/devices/7A4DDFE7-5B5D-40B4-8595-4408E0CC7F56-*/gaming_fan/
+  cpu_mode   gpu_mode    # 0 = Maximum, 1 = Manual, 2 = Automatic
+  cpu_speed  gpu_speed   # 0-100 in Manual mode
+```
+
+When this interface is present, Nitro Control uses it in place of hwmon PWM:
+Automatic/Maximum/Manual all work, and the 85°C thermal override still applies.
+Tested on a **Nitro AN17-51**. No model lookup is involved — the interface is
+detected at runtime, exactly like kernel PWM.
 
 The Nitro AN515-58 is supported by newer upstream Linux kernels. Other Nitro
 models also work when their official kernel driver exposes the same standard
@@ -60,6 +77,30 @@ You can also run:
 nitroctl status
 nitroctl automatic
 ```
+
+## FPS in the bar (MangoHud)
+
+When MangoHud is running in a game, Nitro Control shows the live FPS next to
+the temperature readout (toggle under **Settings → Show FPS**). It reads the
+most recently written MangoHud benchmark log, so no extra daemon is needed.
+
+Requirements:
+
+1. MangoHud installed and actually injected into the game — Steam launch
+   options `MANGOHUD=1 %command%`, or a gamescope session with `--mangoapp`.
+2. MangoHud logging configured in `~/.config/MangoHud/MangoHud.conf`:
+
+   ```ini
+   log_interval=1000
+   output_folder=$HOME/.local/share/MangoHud
+   autostart_log=1
+   ```
+
+   MangoHud then writes one `csv` per game session to that folder. The widget
+   only reports values from a log being written within the last 8 seconds, so
+   the FPS disappears on its own after you close the game. For OpenGL games
+   (e.g. Minecraft) launch the game through `mangohud` so the GL shim is
+   preloaded; Vulkan titles only need `MANGOHUD=1`.
 
 ## Why it is safe
 
@@ -109,11 +150,11 @@ service and driver in place and stops with recovery instructions.
 
 ## Verify a release
 
-Release tags are signed. After cloning, verify v1.0.1 and its privileged
+Release tags are signed. After cloning, verify v1.0.2 and its privileged
 payload with:
 
 ```bash
-git -c gpg.ssh.allowedSignersFile=.github/release-signers verify-tag v1.0.1
+git -c gpg.ssh.allowedSignersFile=.github/release-signers verify-tag v1.0.2
 sha256sum --check --strict release-manifest.sha256
 ./install --target-user "$USER" --verify-release
 ```
